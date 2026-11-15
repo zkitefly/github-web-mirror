@@ -2,6 +2,8 @@
 
 基于 Cloudflare Workers 的 GitHub 镜像，可在无法直接访问 GitHub 时浏览页面、查看文件，并下载仓库归档和 Release 附件。
 
+演示站：https://ghmirror.zkitefly.eu.org/
+
 ## 路由
 
 - `/` 302 跳转到 `/zkitefly/github-web-mirror/blob/main/README.md`
