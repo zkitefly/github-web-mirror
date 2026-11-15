@@ -1,35 +1,36 @@
-﻿> ### 阻断大量请求，WAF 已屏蔽关键字 .m3u8 .ts .m4 .acc .tv tv. .live .stream 等（动态调整）
-To block a large number of requests, WAF has blocked keywords .m3u8 .ts .m4 .acc .tv tv. .live .stream, etc. (dynamic adjustment)
+# GitHub 网页代理 / 下载
 
-> ### 2024-01-31 不受限制的代理服务请使用 https://seep.eu.org 
-2024-01-31 For unrestricted proxy service please use https://seep.eu.org
+基于 Cloudflare Workers 的 GitHub 镜像，可在无法直接访问 GitHub 时浏览页面、查看文件，并下载仓库归档和 Release 附件。
 
-### 🧡 cors.js
-支持跨域请求（转换不支持跨域请求的接口），可直接发起 ajax、fetch  
-Support cross-domain request  
+## 路由
 
-支持 HTTPS (解决远程数据接口不支持 HTTPS )  
-Convert HTTP to HTTPS
+- `/` 302 跳转到 `/zkitefly/github-web-mirror/blob/main/README.md`
+- `/{owner}/{repo}/...` 反代到 `https://github.com/{owner}/{repo}/...`
+- `/_ext/{host}/{path}` 代理 GitHub 附属域名，覆盖静态资源、头像、原始文件、下载、API 等，白名单见 `cors.js` 的 `EXT_HOSTS`
 
-#### 使用 Usage
-- `https://cors.eu.org/{URL}`
-- <https://cors.eu.org/https://api.github.com>
-- <https://cors.eu.org/http://nginx.org/download/nginx-1.30.0.tar.gz>
-- logs https://cors.eu.org/loggly
+## 行为
 
-```js
-// 拷贝到控制台运行 Copy to the console and run
-let url = "http://nginx.org/en/CHANGES";
-await (await fetch(`https://cors.eu.org/${url}`)).text();
-```
+- `github.com` 和 `github.githubassets.com` 返回的 HTML、CSS、JavaScript、JSON 会改写成镜像地址，避免浏览器直连源站
+- 下载类请求（仓库归档、Release 附件、raw 文件）流式透传，不改写正文
+- 登录相关入口（`login`、`signup`、`password_reset` 等）直接返回 403
 
-#### 开发 Dev
-- 安装依赖 / Install dependencies: `npm install`
-- 本地调试 / Local dev: `npm run dev`
-- 发布部署 / Deploy: `npm run prod`
-- 文档 / Docs: https://developers.cloudflare.com/workers/get-started/guide/
-- `wrangler.jsonc` `vars.logglyCustomerToken` Loggly / Source Setup / Customer Token
-- `wwwroot/loggly.js` `CONFIG.apiToken`：Loggly / Settings / API Token
+## 限制
 
-### Source
-<https://github.com/netnr/workers>
+- 镜像域名下无法保存 GitHub 的 Cookie，因此不支持登录、Star、提交等需要会话的操作
+- 经由镜像访问 `api.github.com` 时受 Worker 出口 IP 的速率限制
+- `docs.github.com`、`github.blog` 等外部链接保持直连
+
+## 部署
+
+- 安装依赖：`npm install`
+- 登录 Cloudflare：`npx wrangler login`
+- 部署：`npm run prod`（即 `npx wrangler deploy`）
+- 本地调试：`npm run dev`
+
+也可设置 `CLOUDFLARE_API_TOKEN` 和 `CLOUDFLARE_ACCOUNT_ID` 后在 CI 中执行 `npx wrangler deploy`，或在 Cloudflare 控制台连接 Git 仓库自动部署。
+
+Worker 名称等配置见 `wrangler.jsonc`，首页跳转目标见 `cors.js` 的 `HOME_PATH`。免费套餐每天 10 万请求，代理静态资源会放大请求数。
+
+## 来源
+
+基于 <https://github.com/netnr/workers> 改造。

@@ -1,153 +1,205 @@
-/*
- * https://github.com/netnr/workers
- *
- * 2019-10-12 - 2026-05-03
- * netnr
- */
+const GITHUB_ORIGIN = "https://github.com";
+const HOME_PATH = "/zkitefly/github-web-mirror/blob/main/README.md";
+const EXT_PREFIX = "/_ext/";
 
-const DEFAULT_ALLOW_HEADERS = "Accept, Authorization, Cache-Control, Content-Type, DNT, If-Modified-Since, Keep-Alive, Origin, User-Agent, X-Requested-With, Token, x-access-token";
-const ALLOW_METHODS = "GET, POST, PUT, PATCH, DELETE, OPTIONS";
+// 禁用的登录相关入口，按路径首段匹配（/login、/login/oauth/... 等都会被拦截）
+const BLOCKED_AUTH_PAGES = [
+    "login",
+    "logout",
+    "session",
+    "sessions",
+    "signup",
+    "signup_check",
+    "password_reset",
+    "account_verifications",
+    "join"
+];
+
+// 允许代理的 GitHub 附属域名，同时用于改写页面中的资源地址
+const EXT_HOSTS = [
+    "github.githubassets.com",
+    "opengraph.githubassets.com",
+    "avatars.githubusercontent.com",
+    "identicons.github.com",
+    "camo.githubusercontent.com",
+    "user-images.githubusercontent.com",
+    "private-user-images.githubusercontent.com",
+    "secured-user-images.githubusercontent.com",
+    "private-avatars.githubusercontent.com",
+    "repository-images.githubusercontent.com",
+    "marketplace-screenshots.githubusercontent.com",
+    "media.githubusercontent.com",
+    "raw.githubusercontent.com",
+    "objects.githubusercontent.com",
+    "objects-origin.githubusercontent.com",
+    "release-assets.githubusercontent.com",
+    "viewscreen.githubusercontent.com",
+    "codeload.github.com",
+    "api.github.com",
+    "collector.github.com",
+    "www.githubstatus.com",
+    "github-cloud.s3.amazonaws.com",
+    "github-production-release-asset-2e65be.s3.amazonaws.com",
+    "github-production-repository-file-5c1aeb.s3.amazonaws.com",
+    "github-production-repository-image-32fea6.s3.amazonaws.com",
+    "github-production-upload-manifest-file-7fdce7.s3.amazonaws.com",
+    "github-production-user-asset-6210df.s3.amazonaws.com"
+].sort((a, b) => b.length - a.length);
+
+// 需要改写响应内容的上游主机
+const REWRITE_HOSTS = new Set(["github.com", "github.githubassets.com"]);
+
+// 需要改写正文的响应类型（text/plain 等原始内容保持原样）
+const REWRITE_CONTENT_TYPE = /^(?:text\/html|text\/css|application\/(?:x-)?javascript|text\/javascript|application\/json)\b/i;
+
+const EXT_HOST_ALT = EXT_HOSTS.map((host) => host.replace(/\./g, "\\.")).join("|");
+const EXT_ABSOLUTE_RE = new RegExp(`https?:\\/\\/(${EXT_HOST_ALT})(?![a-zA-Z0-9.-])`, "gi");
+const EXT_PROTOCOL_RE = new RegExp(`\\/\\/(${EXT_HOST_ALT})(?![a-zA-Z0-9.-])`, "gi");
+const GITHUB_LINK_RE = /https?:\/\/(?:www\.)?github\.com(\/|(?=[?#"'`\s<>\\),;$+]|$))/gi;
+
 const DROP_REQUEST_HEADERS = [
     "host",
     "content-length",
+    "connection",
+    "cdn-loop",
     "cf-connecting-ip",
     "cf-ipcountry",
     "cf-ray",
     "cf-visitor",
+    "x-forwarded-for",
+    "x-forwarded-host",
     "x-forwarded-proto",
-    "x-real-ip"
+    "x-real-ip",
+    "true-client-ip"
+];
+
+const DROP_RESPONSE_HEADERS = [
+    "content-security-policy",
+    "content-security-policy-report-only",
+    "x-frame-options"
 ];
 
 export default {
-    async fetch(request, env, ctx) {
-        const setCorsHeaders = (headers) => {
-            headers.set("Access-Control-Allow-Origin", "*");
-            headers.set("Access-Control-Allow-Methods", ALLOW_METHODS);
-            headers.set(
-                "Access-Control-Allow-Headers",
-                request.headers.get("Access-Control-Request-Headers") || DEFAULT_ALLOW_HEADERS
-            );
-            headers.set("Access-Control-Expose-Headers", "*");
-            headers.set("Access-Control-Max-Age", "86400");
-            headers.set("Vary", "Origin, Access-Control-Request-Headers");
-        };
-
-        const jsonResponse = (payload, status = 200) => {
-            const headers = new Headers({ "content-type": "application/json; charset=utf-8" });
-            setCorsHeaders(headers);
-            return new Response(JSON.stringify(payload), { status, headers });
-        };
+    async fetch(request) {
+        const url = new URL(request.url);
 
         if (request.method === "OPTIONS") {
-            const headers = new Headers();
-            setCorsHeaders(headers);
-            return new Response(null, { status: 204, headers });
+            return new Response(null, { status: 204, headers: corsHeaders(new Headers()) });
         }
 
-        let targetUrl = "";
+        // 首页统一跳到仓库页面
+        if (url.pathname === "/") {
+            return Response.redirect(new URL(HOME_PATH, url).toString(), 302);
+        }
+
+        // 登录相关页面直接拒绝
+        const firstSegment = url.pathname.split("/")[1].toLowerCase();
+        if (BLOCKED_AUTH_PAGES.includes(firstSegment)) {
+            return jsonResponse({ code: -1, msg: "login is disabled" }, 403);
+        }
+
+        let target;
+        try {
+            target = resolveTarget(url);
+        } catch (err) {
+            return jsonResponse({ code: -1, msg: err.message }, 403);
+        }
+
         let response;
         try {
-            const current = new URL(request.url);
-            const raw = request.url.slice(current.origin.length + 1);
-            const decoded = decodeURIComponent(raw || "").trim();
-
-            if (!decoded || decoded === "favicon.ico" || decoded === "robots.txt") {
-                targetUrl = "";
-            } else {
-                if (!decoded.includes(".")) {
-                    throw new Error("invalid target url");
-                }
-
-                // fix missing protocol
-                targetUrl = decoded.includes("://")
-                    ? decoded
-                    : decoded.includes(":/")
-                        ? decoded.replace(":/", "://")
-                        : `http://${decoded}`;
-            }
-
-            if (!targetUrl) {
-                response = jsonResponse({
-                    code: 0,
-                    usage: "Host/{URL}",
-                    source: 'https://github.com/netnr/workers',
-                    note: 'Blocking a large number of requests, please deploy it yourself'
-                });
-            } else {
-                const headers = new Headers(request.headers);
-                for (const name of DROP_REQUEST_HEADERS) {
-                    headers.delete(name);
-                }
-
-                const init = {
-                    method: request.method,
-                    headers,
-                    redirect: "follow"
-                };
-
-                if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method)) {
-                    init.body = request.body;
-                }
-
-                const upstream = await fetch(targetUrl, init);
-                const outHeaders = new Headers(upstream.headers);
-                setCorsHeaders(outHeaders);
-
-                response = new Response(upstream.body, {
-                    status: upstream.status,
-                    statusText: upstream.statusText,
-                    headers: outHeaders
-                });
-            }
+            const rewrite = REWRITE_HOSTS.has(new URL(target).hostname);
+            response = await proxy(request, target, rewrite);
         } catch (err) {
             response = jsonResponse({
                 code: -1,
                 msg: err && err.message ? err.message : String(err)
-            }, 500);
+            }, 502);
         }
-
-        logStack.add(ctx, request, response, targetUrl, env.logglyCustomerToken);
 
         return response;
     }
 };
 
-const logStack = {
-    add: (ctx, request, response, targetUrl, customerToken) => {
-        if (customerToken) {
-            ctx.waitUntil(fetch(`http://logs-01.loggly.com/inputs/${customerToken}/tag/http/`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json; charset=utf-8" },
-                body: JSON.stringify(logStack.buildBody(request, response, targetUrl)),
-            }));
+function resolveTarget(url) {
+    if (url.pathname.startsWith(EXT_PREFIX)) {
+        const rest = url.pathname.slice(EXT_PREFIX.length);
+        const index = rest.indexOf("/");
+        const host = (index === -1 ? rest : rest.slice(0, index)).toLowerCase();
+        if (!EXT_HOSTS.includes(host)) {
+            throw new Error("host not allowed: " + host);
         }
-    },
-
-    buildBody: (request, response, targetUrl) => {
-        const hua = request.headers.get("user-agent")
-        const hip = request.headers.get("cf-connecting-ip")
-        const hrf = request.headers.get("referer")
-        const url = new URL(request.url)
-
-        const body = {
-            method: request.method,
-            statusCode: response.status,
-            clientIp: hip,
-            referer: hrf,
-            userAgent: hua,
-            host: url.host,
-            path: url.pathname,
-            proxyHost: null,
-        }
-
-        const turl = (targetUrl || "").trim();
-        if (turl) {
-            try {
-                body.path = turl;
-                body.proxyHost = new URL(turl).host;
-            } catch { }
-        }
-
-        return body;
+        const path = index === -1 ? "/" : rest.slice(index);
+        return `https://${host}${path}${url.search}`;
     }
-};
+
+    return GITHUB_ORIGIN + url.pathname + url.search;
+}
+
+async function proxy(request, target, rewriteContent) {
+    const headers = new Headers(request.headers);
+    for (const name of DROP_REQUEST_HEADERS) {
+        headers.delete(name);
+    }
+    // 交给运行时处理压缩，便于读取并改写 HTML
+    headers.delete("accept-encoding");
+
+    const init = {
+        method: request.method,
+        headers,
+        redirect: "follow"
+    };
+    if (!["GET", "HEAD"].includes(request.method)) {
+        init.body = request.body;
+    }
+
+    const upstream = await fetch(target, init);
+    const outHeaders = new Headers(upstream.headers);
+    for (const name of DROP_RESPONSE_HEADERS) {
+        outHeaders.delete(name);
+    }
+    corsHeaders(outHeaders);
+
+    const contentType = (upstream.headers.get("content-type") || "").toLowerCase();
+
+    if (rewriteContent && upstream.status === 200 && REWRITE_CONTENT_TYPE.test(contentType)) {
+        const body = await upstream.text();
+        outHeaders.delete("content-encoding");
+        outHeaders.delete("content-length");
+        return new Response(rewriteGitHubContent(body, new URL(request.url).origin), {
+            status: 200,
+            statusText: upstream.statusText,
+            headers: outHeaders
+        });
+    }
+
+    return new Response(upstream.body, {
+        status: upstream.status,
+        statusText: upstream.statusText,
+        headers: outHeaders
+    });
+}
+
+function rewriteGitHubContent(text, origin) {
+    // 主站绝对地址改写为本站地址（保留尾部路径）
+    text = text.replace(GITHUB_LINK_RE, (match, slash) => origin + (slash || ""));
+
+    // 附属域名的绝对地址改写为 /_ext 代理地址
+    text = text.replace(EXT_ABSOLUTE_RE, (match, host) => `${origin}${EXT_PREFIX}${host}`);
+
+    // 协议相对地址（//host/...）同样走代理
+    const selfHost = new URL(origin).host;
+    return text.replace(EXT_PROTOCOL_RE, (match, host) => `//${selfHost}${EXT_PREFIX}${host}`);
+}
+
+function corsHeaders(headers) {
+    headers.set("Access-Control-Allow-Origin", "*");
+    headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+    headers.set("Access-Control-Allow-Headers", "*");
+    headers.set("Access-Control-Expose-Headers", "*");
+    return headers;
+}
+
+function jsonResponse(payload, status = 200) {
+    const headers = corsHeaders(new Headers({ "Content-Type": "application/json; charset=utf-8" }));
+    return new Response(JSON.stringify(payload), { status, headers });
+}
