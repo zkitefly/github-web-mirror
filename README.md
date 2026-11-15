@@ -13,6 +13,7 @@
 ## 行为
 
 - `github.com` 和 `github.githubassets.com` 返回的 HTML、CSS、JavaScript、JSON 会改写成镜像地址，避免浏览器直连源站
+- 静态资源和公开 API 按上游 `Cache-Control` 写入 Cloudflare 边缘缓存（如 GitHub 静态资源一年、`api.github.com` 60 秒），命中缓存后不再回源
 - 下载类请求（仓库归档、Release 附件、raw 文件）流式透传，不改写正文
 - 登录相关入口（`login`、`signup`、`password_reset` 等）直接返回 403
 

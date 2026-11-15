@@ -76,11 +76,15 @@ const DROP_REQUEST_HEADERS = [
 const DROP_RESPONSE_HEADERS = [
     "content-security-policy",
     "content-security-policy-report-only",
-    "x-frame-options"
+    "x-frame-options",
+    "set-cookie"
 ];
 
+// Cloudflare 边缘缓存，按上游缓存策略存储，减少重复回源
+const edgeCache = typeof caches !== "undefined" ? caches.default : null;
+
 export default {
-    async fetch(request) {
+    async fetch(request, _env, ctx) {
         const url = new URL(request.url);
 
         if (request.method === "OPTIONS") {
@@ -105,6 +109,14 @@ export default {
             return jsonResponse({ code: -1, msg: err.message }, 403);
         }
 
+        const cacheableRequest = edgeCache && canUseCache(request);
+        if (cacheableRequest) {
+            const cached = await edgeCache.match(request);
+            if (cached) {
+                return cached;
+            }
+        }
+
         let response;
         try {
             const rewrite = REWRITE_HOSTS.has(new URL(target).hostname);
@@ -116,9 +128,39 @@ export default {
             }, 502);
         }
 
+        if (cacheableRequest && isCacheable(response) && ctx && typeof ctx.waitUntil === "function") {
+            ctx.waitUntil(edgeCache.put(request, response.clone()).catch(() => { }));
+        }
+
         return response;
     }
 };
+
+function canUseCache(request) {
+    return request.method === "GET"
+        && !request.headers.has("range")
+        && !request.headers.has("authorization")
+        && !request.headers.has("cookie");
+}
+
+// 只缓存上游明确允许共享缓存且带有效期的成功响应
+function isCacheable(response) {
+    if (response.status !== 200) {
+        return false;
+    }
+    if (response.headers.has("set-cookie")) {
+        return false;
+    }
+    if ((response.headers.get("vary") || "").trim() === "*") {
+        return false;
+    }
+
+    const cacheControl = (response.headers.get("cache-control") || "").toLowerCase();
+    if (!cacheControl || cacheControl.includes("no-store") || cacheControl.includes("private")) {
+        return false;
+    }
+    return /(?:s-maxage|max-age)\s*=\s*[1-9]\d*/.test(cacheControl);
+}
 
 function resolveTarget(url) {
     if (url.pathname.startsWith(EXT_PREFIX)) {
