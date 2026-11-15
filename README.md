@@ -4,6 +4,8 @@
 
 演示站：https://ghmirror.zkitefly.eu.org/
 
+注：为防止过多请求把我的额度用光，我设置了速录限制，访问时会报错误（429 / Error 1015）属于正常现象，重复等待 10 秒将网页所有必要资源缓存完成后即可流畅访问，或自行部署。
+
 ## 路由
 
 - `/` 302 跳转到 `/zkitefly/github-web-mirror/blob/main/README.md`
