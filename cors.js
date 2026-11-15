@@ -165,7 +165,7 @@ async function proxy(request, target, rewriteContent) {
         const body = await upstream.text();
         outHeaders.delete("content-encoding");
         outHeaders.delete("content-length");
-        return new Response(rewriteGitHubContent(body, new URL(request.url).origin), {
+        return new Response(rewriteGitHubContent(body, new URL(request.url).origin, contentType.includes("text/html")), {
             status: 200,
             statusText: upstream.statusText,
             headers: outHeaders
@@ -179,7 +179,26 @@ async function proxy(request, target, rewriteContent) {
     });
 }
 
-function rewriteGitHubContent(text, origin) {
+// 页面中展示的代码内容（<pre>、<code>）保持原样，避免把把代码块的内容修改
+const CODE_BLOCK_RE = /<pre\b[^>]*>[\s\S]*?<\/pre>|<code\b[^>]*>[\s\S]*?<\/code>/gi;
+
+function rewriteGitHubContent(text, origin, isHtml) {
+    if (!isHtml) {
+        return rewritePlain(text, origin);
+    }
+
+    let result = "";
+    let last = 0;
+    let match;
+    CODE_BLOCK_RE.lastIndex = 0;
+    while ((match = CODE_BLOCK_RE.exec(text)) !== null) {
+        result += rewritePlain(text.slice(last, match.index), origin) + match[0];
+        last = match.index + match[0].length;
+    }
+    return result + rewritePlain(text.slice(last), origin);
+}
+
+function rewritePlain(text, origin) {
     // 主站绝对地址改写为本站地址（保留尾部路径）
     text = text.replace(GITHUB_LINK_RE, (match, slash) => origin + (slash || ""));
 
