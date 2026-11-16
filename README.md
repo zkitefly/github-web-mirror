@@ -4,7 +4,9 @@
 
 基于 Cloudflare Workers 的 GitHub 镜像，可在无法直接访问 GitHub 时浏览页面、查看文件，并下载仓库归档和 Release 附件。
 
-使用方法：直接将 `github.com` 替换为以下内容即可：
+## 演示站
+
+直接将 `github.com` 替换为以下内容即可：
 
 ```
 ghmirror.zkitefly.eu.org
