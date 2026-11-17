@@ -9,7 +9,7 @@
 直接将 `github.com` 替换为以下内容即可：
 
 ```
-ghmirror.zkitefly.eu.org
+ghm.zkitefly.eu.org
 ```
 
 注：为防止过多请求把我的额度用光，我设置了速录限制，访问时会报错误（HTTP 429 / Error 1015）属于正常现象，只需重复刷新网页即可，如有需要请自行部署。
